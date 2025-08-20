@@ -50,8 +50,8 @@ endif ()
 
 include(${acrion_cmake_SOURCE_DIR}/set-cpp-version.cmake)
 
-include(${acrion_cmake_SOURCE_DIR}/get-project-version-from-commit-count.cmake)
-get_project_version_from_commit_count("origin/master")
+include(${acrion_cmake_SOURCE_DIR}/get-project-version-from-git-tag.cmake)
+get_project_version_from_git_tag("origin/main")
 
 project(acrion_image VERSION ${version_major}.${version_minor}.${version_patch} DESCRIPTION "nexuslua plugin providing basic image processing functions including I/O")
 
