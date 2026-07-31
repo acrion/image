@@ -141,6 +141,14 @@ namespace acrion::image
                 _blueIndex  = 0;
                 _grayIndex  = 0;
                 break;
+            case 2:
+                // gray + alpha, as delivered by ImageMagick's GRAYA layout
+                _redIndex   = 0;
+                _greenIndex = 0;
+                _blueIndex  = 0;
+                _grayIndex  = 0;
+                _alphaIndex = 1;
+                break;
             case 3:
                 _redIndex   = 0;
                 _greenIndex = 1;
