@@ -112,7 +112,7 @@ namespace acrion::image
                 _index                   = 4;
                 break;
             default:
-                throw std::runtime_error("acrion::image::Bitmap::Construction from buffer: Unsupported image depth " + std::to_string(Depth()));
+                throw std::runtime_error("acrion::image::Bitmap::Construction from buffer: Unsupported image depth " + std::to_string(depth));
             }
         }
 
@@ -141,7 +141,7 @@ namespace acrion::image
                 _index                   = 4;
                 break;
             default:
-                throw std::runtime_error("acrion::image::Bitmap::Construction from buffer: Unsupported image depth " + std::to_string(Depth()));
+                throw std::runtime_error("acrion::image::Bitmap::Construction from buffer: Unsupported image depth " + std::to_string(depth));
             }
         }
 
@@ -314,8 +314,15 @@ namespace acrion::image
             }
         }
 
+        /// \brief bytes per sample; negative means floating point (-8 is what FITS yields)
+        /// \return 0 if this instance holds no image, i.e. if no constructor selected a depth
         int Depth() const
         {
+            if (_index < 0 || _index >= (int)std::tuple_size<BitmapDataTypes>::value)
+            {
+                return 0; // shifting by a negative amount would be undefined behaviour
+            }
+
             return _index < 4 ? (1 << _index) : -(1 << (_index - 1));
         }
 
