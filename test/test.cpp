@@ -30,6 +30,7 @@ along with acrion image. If not, see <https://www.gnu.org/licenses/>.
 #include "acrion/image/interpolation.hpp"
 #include "acrion/image/mixable_scalar.hpp"
 
+#include <cmath>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -359,6 +360,145 @@ TEST(AbsoluteDiffTest, A64BitDifferenceDoesNotWrap)
     right.Set(Color<uint64_t>(1));
 
     EXPECT_EQ(left.AbsoluteDiff(right)->GetGray(0, 0), max - 1);
+}
+
+// MaxGray is where acrion imago's star detection gets its threshold: a candidate has to be
+// brighter than the average plus the standard deviation of its detection window. Both of
+// those come out of the loop below, which is an `#pragma omp parallel for` over the rows -
+// with `sum` and the index `i` shared and unsynchronised.
+
+namespace
+{
+    /// The same image every time: a gradient, so that the standard deviation is not zero and
+    /// a lost summand cannot hide behind a uniform field.
+    BitmapData<uint16_t> GradientImage(const int width, const int height)
+    {
+        BitmapData<uint16_t> data(width, height, 1);
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                data.Plot(x, y, Color<uint16_t>(static_cast<uint16_t>(1000 + (x % 97) * 137 + (y % 31) * 11)));
+            }
+        }
+        return data;
+    }
+}
+
+TEST(MaxGrayTest, TheAverageIsTheAverage)
+{
+    const int            width  = 400;
+    const int            height = 400;
+    const BitmapData<uint16_t> image = GradientImage(width, height);
+
+    long double expected = 0;
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x)
+        {
+            expected += image.GetGray(x, y);
+        }
+    }
+    expected /= (long double)width * height;
+
+    uint16_t average = 0;
+    image.MaxGray(0, 0, width - 1, height - 1, nullptr, nullptr, &average);
+
+    EXPECT_NEAR(average, (double)expected, 1.0);
+}
+
+TEST(MaxGrayTest, TheAverageAndDeviationDoNotDependOnThreadScheduling)
+{
+    // Twenty runs over the same image must give the same two numbers. They did not: `sum`
+    // and the index into the sample vector were both written from every thread without
+    // synchronisation, so summands were lost and samples overwritten each other.
+    const int            width  = 400;
+    const int            height = 400;
+    const BitmapData<uint16_t> image = GradientImage(width, height);
+
+    uint16_t firstAverage   = 0;
+    double   firstDeviation = 0;
+    image.MaxGray(0, 0, width - 1, height - 1, nullptr, nullptr, &firstAverage,
+                  nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &firstDeviation);
+
+    for (int run = 1; run < 20; ++run)
+    {
+        SCOPED_TRACE("run " + std::to_string(run));
+
+        uint16_t average   = 0;
+        double   deviation = 0;
+        image.MaxGray(0, 0, width - 1, height - 1, nullptr, nullptr, &average,
+                      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &deviation);
+
+        EXPECT_EQ(average, firstAverage);
+        EXPECT_DOUBLE_EQ(deviation, firstDeviation);
+    }
+}
+
+TEST(MaxGrayTest, TheDeviationIsTheDeviationOfTheWholeWindow)
+{
+    const int            width  = 400;
+    const int            height = 400;
+    const BitmapData<uint16_t> image = GradientImage(width, height);
+
+    long double sum = 0;
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x)
+            sum += image.GetGray(x, y);
+
+    const double mean = (double)(sum / ((long double)width * height));
+
+    double variance = 0;
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x)
+            variance += ((double)image.GetGray(x, y) - mean) * ((double)image.GetGray(x, y) - mean);
+
+    const double expected = std::sqrt(variance / ((double)width * height));
+
+    uint16_t average   = 0;
+    double   deviation = 0;
+    image.MaxGray(0, 0, width - 1, height - 1, nullptr, nullptr, &average,
+                  nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &deviation);
+
+    EXPECT_NEAR(deviation, expected, 1.0);
+}
+
+TEST(MinGrayTest, TheAverageIsTheAverage)
+{
+    // MinGray accumulates its sum the same way, and nothing else reads it - so it is only
+    // wrong, not visibly wrong.
+    const int                  width  = 400;
+    const int                  height = 400;
+    const BitmapData<uint16_t> image  = GradientImage(width, height);
+
+    long double expected = 0;
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x)
+            expected += image.GetGray(x, y);
+    expected /= (long double)width * height;
+
+    uint16_t average = 0;
+    image.MinGray(0, 0, width - 1, height - 1, nullptr, nullptr, &average);
+
+    EXPECT_NEAR(average, (double)expected, 1.0);
+}
+
+TEST(MaxGray2Test, TheAverageIsTheAverage)
+{
+    const int                  width  = 400;
+    const int                  height = 400;
+    const BitmapData<uint16_t> image  = GradientImage(width, height);
+
+    long double expected = 0;
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x)
+            expected += image.GetGray(x, y);
+    expected /= (long double)width * height;
+
+    uint16_t average = 0;
+    image.MaxGray2(0, 0, width - 1, height - 1, nullptr, nullptr, &average);
+
+    EXPECT_NEAR(average, (double)expected, 1.0);
 }
 
 // interpolation::Do is what acrion imago samples its corrected images with, so it decides

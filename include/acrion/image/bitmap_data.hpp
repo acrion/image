@@ -438,28 +438,45 @@ namespace acrion::image
             x1 = std::min(_width - 1, x1);
             y1 = std::min(_height - 1, y1);
 
-            T              max  = 0;
-            T              max2 = 0;
-            T              min  = std::numeric_limits<T>::max();
-            long double    sum  = 0;
+            T max  = 0;
+            T max2 = 0;
+            T min  = std::numeric_limits<T>::max();
+
+            const int      windowWidth  = x1 - x0 + 1;
+            const int      windowHeight = y1 - y0 + 1;
             std::vector<T> data;
             if (stdDeviation)
             {
-                data.resize((x1 - x0 + 1) * (y1 - y0 + 1));
+                data.resize((size_t)windowWidth * windowHeight);
             }
-            int i = 0;
+
+            // One partial sum per row, added up in order afterwards.
+            //
+            // This used to be a single `sum` and a single index `i`, both written from every
+            // thread of the loop below without any synchronisation: summands were lost, and
+            // the samples overwrote each other and left holes that counted as zero. Both
+            // numbers were wrong and neither was reproducible - measured on a 400x400
+            // gradient, the average came out up to 5% beside the true one and differed
+            // between runs of the same image. acrion imago derives its star detection
+            // threshold from exactly these two values.
+            //
+            // Row sums rather than a lock, because a lock would fix the loss but not the
+            // order, and the order decides the last bits of a long double sum.
+            std::vector<long double> rowSums((size_t)windowHeight, 0.0L);
 
 #pragma omp parallel for
             for (int y = y0; y <= y1; ++y)
             {
+                long double rowSum = 0;
+
                 for (int x = x0; x <= x1; ++x)
                 {
                     const T current = GetGray(x, y);
                     if (stdDeviation)
                     {
-                        data[i++] = (T)current;
+                        data[(size_t)(y - y0) * windowWidth + (x - x0)] = current;
                     }
-                    sum += current;
+                    rowSum += current;
                     std::lock_guard<std::mutex> lock(mtx);
                     if (current > max)
                     {
@@ -487,6 +504,14 @@ namespace acrion::image
                         if (darkestY) *darkestY = y;
                     }
                 }
+
+                rowSums[(size_t)(y - y0)] = rowSum;
+            }
+
+            long double sum = 0;
+            for (const long double rowSum : rowSums)
+            {
+                sum += rowSum;
             }
 
             if (stdDeviation)
@@ -527,21 +552,26 @@ namespace acrion::image
             xRight  = std::min(_width - 1, xRight);
             yBottom = std::min(_height - 1, yBottom);
 
-            T           max  = (T)-1;
-            T           max2 = (T)-1;
-            long double sum  = 0;
-            int         x0   = 0;
-            int         y0   = 0;
-            int         x1   = 0;
-            int         y1   = 0;
+            T   max  = (T)-1;
+            T   max2 = (T)-1;
+            int x0   = 0;
+            int y0   = 0;
+            int x1   = 0;
+            int y1   = 0;
+
+            // One partial sum per row - see MaxGray for why a single shared accumulator in
+            // an omp loop is both wrong and irreproducible.
+            std::vector<long double> rowSums((size_t)(yBottom - yTop + 1), 0.0L);
 
 #pragma omp parallel for
             for (int y = yTop; y <= yBottom; ++y)
             {
+                long double rowSum = 0;
+
                 for (int x = xLeft; x <= xRight; ++x)
                 {
                     const T current = (T)GetGray(x, y);
-                    sum += current;
+                    rowSum += current;
                     std::lock_guard<std::mutex> lock(mtx);
                     if (current > max)
                     {
@@ -574,6 +604,14 @@ namespace acrion::image
                         }
                     }
                 }
+
+                rowSums[(size_t)(y - yTop)] = rowSum;
+            }
+
+            long double sum = 0;
+            for (const long double rowSum : rowSums)
+            {
+                sum += rowSum;
             }
 
             if (average)
@@ -604,17 +642,21 @@ namespace acrion::image
             x1 = std::min(_width - 1, x1);
             y1 = std::min(_height - 1, y1);
 
-            T           min  = std::numeric_limits<T>::max();
-            T           min2 = std::numeric_limits<T>::max();
-            long double sum  = 0;
+            T min  = std::numeric_limits<T>::max();
+            T min2 = std::numeric_limits<T>::max();
+
+            // One partial sum per row - see MaxGray.
+            std::vector<long double> rowSums((size_t)(y1 - y0 + 1), 0.0L);
 
 #pragma omp parallel for
             for (int y = y0; y <= y1; ++y)
             {
+                long double rowSum = 0;
+
                 for (int x = x0; x <= x1; ++x)
                 {
                     const T current = GetGray(x, y);
-                    sum += current;
+                    rowSum += current;
                     std::lock_guard<std::mutex> lock(mtx);
                     if (current < min)
                     {
@@ -636,6 +678,14 @@ namespace acrion::image
                         if (secondDarkestY) *secondDarkestY = y;
                     }
                 }
+
+                rowSums[(size_t)(y - y0)] = rowSum;
+            }
+
+            long double sum = 0;
+            for (const long double rowSum : rowSums)
+            {
+                sum += rowSum;
             }
 
             if (average)
