@@ -155,10 +155,14 @@ namespace acrion::image
                 _blueIndex  = 2;
                 break;
             case 4:
-                _alphaIndex = 0;
-                _redIndex   = 1;
-                _greenIndex = 2;
-                _blueIndex  = 3;
+                // RGBA, as delivered by ImageMagick's RGBA layout - the same order the
+                // reader and writer use, and consistent with the cases above, where the
+                // colour comes first and alpha last. This used to say alpha first, which
+                // rotated every colour accessor by one position for four channel images.
+                _redIndex   = 0;
+                _greenIndex = 1;
+                _blueIndex  = 2;
+                _alphaIndex = 3;
                 break;
             default:
                 throw std::runtime_error("BitmapData: Unsupported number of channels: " + std::to_string(_channels));
@@ -899,10 +903,10 @@ namespace acrion::image
                             }
                             else if (_channels == 4)
                             {
-                                dest[0] = CalculateDisplayValue(src[3]); // B
-                                dest[1] = CalculateDisplayValue(src[2]); // G
-                                dest[2] = CalculateDisplayValue(src[1]); // R
-                                dest[3] = CalculateDisplayValue(src[0]); // A
+                                dest[0] = CalculateDisplayValue(src[2]); // B
+                                dest[1] = CalculateDisplayValue(src[1]); // G
+                                dest[2] = CalculateDisplayValue(src[0]); // R
+                                dest[3] = CalculateDisplayValue(src[3]); // A
                             }
                             else
                             {
@@ -962,10 +966,10 @@ namespace acrion::image
                             }
                             else if (_channels == 4)
                             {
-                                dest[0] = CalculateDisplayValue(src[3]); // B
-                                dest[1] = CalculateDisplayValue(src[2]); // G
-                                dest[2] = CalculateDisplayValue(src[1]); // R
-                                dest[3] = CalculateDisplayValue(src[0]); // A
+                                dest[0] = CalculateDisplayValue(src[2]); // B
+                                dest[1] = CalculateDisplayValue(src[1]); // G
+                                dest[2] = CalculateDisplayValue(src[0]); // R
+                                dest[3] = CalculateDisplayValue(src[3]); // A
                             }
                             else
                             {
