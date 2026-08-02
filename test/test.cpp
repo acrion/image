@@ -720,6 +720,100 @@ TEST(ConvertToDepth8Test, ConvertsOnlyTheRequestedRectangle)
     delete[] display;
 }
 
+TEST(ConvertToDepth8Test, ARectangleRendersTheSamePixelsAsTheWholeImageDoes)
+{
+    // The assumption acrionphoto's partial repaint rests on. When a plugin reports the region
+    // it changed, only that rectangle is converted again and painted into the cached pixmap of
+    // the whole image. That is only invisible if a rectangle comes out exactly as the
+    // corresponding window of the full render - so: no dependence on the pixels around it, no
+    // different rounding at an edge, and the right row stride at both sizes.
+    //
+    // The pattern varies in both directions, because one that varies only in x cannot tell a
+    // wrong row from a right one, and the display range is the full range of the type so that
+    // the expected value is the stored one.
+    constexpr int width = 14, height = 9;
+
+    BitmapData<uint8_t> data(width, height, 1);
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x)
+        {
+            data.Plot(x, y, Color<uint8_t>(static_cast<uint8_t>((x * 7 + y * 31) % 256)));
+        }
+    }
+    data.SetBrightnessRangeForDisplay(0, 255);
+
+    const auto stride = [](const int w)
+    { return (w + 3) / 4 * 4; }; // greyscale rows are padded to four bytes
+
+    uint8_t* whole = data.ConvertToDepth8();
+    ASSERT_NE(whole, nullptr);
+
+    // Deliberately of a width that is not a multiple of four, and not at the origin: the
+    // padding of the patch differs from the padding of the whole image, and an implementation
+    // that assumed the two strides were equal would pass at every other size.
+    constexpr int rx = 5, ry = 2, rw = 6, rh = 3;
+
+    uint8_t* part = data.ConvertToDepth8(0, rx, ry, rw, rh);
+    ASSERT_NE(part, nullptr);
+
+    for (int y = 0; y < rh; ++y)
+    {
+        for (int x = 0; x < rw; ++x)
+        {
+            EXPECT_EQ(part[y * stride(rw) + x], whole[(ry + y) * stride(width) + rx + x])
+                << "at " << x << "/" << y << " of the rectangle";
+        }
+    }
+
+    delete[] part;
+    delete[] whole;
+}
+
+TEST(ConvertToDepth8Test, ARectangleOfAColourImageAlsoMatchesTheWholeRender)
+{
+    // The same property for the four-byte path, where the stride is not padded and the
+    // channels are reordered into BGRA. Colour is where BUG-20 lived, so a partial repaint
+    // that got the channel order right only at the origin is a real possibility.
+    constexpr int width = 7, height = 5;
+
+    BitmapData<uint8_t> data(width, height, 3);
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x)
+        {
+            data.Plot(x, y, Color<uint8_t>(static_cast<uint8_t>(x * 9),
+                                           static_cast<uint8_t>(y * 11),
+                                           static_cast<uint8_t>(x * 3 + y * 5)));
+        }
+    }
+    data.SetBrightnessRangeForDisplay(0, 255);
+
+    uint8_t* whole = data.ConvertToDepth8();
+    ASSERT_NE(whole, nullptr);
+
+    constexpr int rx = 2, ry = 1, rw = 3, rh = 3;
+
+    uint8_t* part = data.ConvertToDepth8(0, rx, ry, rw, rh);
+    ASSERT_NE(part, nullptr);
+
+    for (int y = 0; y < rh; ++y)
+    {
+        for (int x = 0; x < rw; ++x)
+        {
+            for (int channel = 0; channel < 4; ++channel)
+            {
+                EXPECT_EQ(part[(y * rw + x) * 4 + channel],
+                          whole[((ry + y) * width + rx + x) * 4 + channel])
+                    << "channel " << channel << " at " << x << "/" << y;
+            }
+        }
+    }
+
+    delete[] part;
+    delete[] whole;
+}
+
 TEST(ConvertToDepth8Test, RefusesAnUnsupportedChannelCount)
 {
     // Init() already rejects anything but 1..4, so a bitmap with five channels cannot be
