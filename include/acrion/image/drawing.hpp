@@ -61,7 +61,11 @@ along with acrion image. If not, see <https://www.gnu.org/licenses/>.
 
 namespace acrion::image::drawing
 {
-    /// \brief A clipping region. A width or height of zero or less means "the whole image".
+    /// \brief A rectangle - both the clipping region of a call and the region it dirtied.
+    ///
+    /// A width or height of zero or less means "empty" everywhere except as a clip, where it
+    /// means "the whole image": a caller that does not want to clip should not have to know
+    /// the size of the image to say so.
     struct Rect
     {
         int x{0};
@@ -70,6 +74,53 @@ namespace acrion::image::drawing
         int h{0};
 
         bool IsEmpty() const { return w <= 0 || h <= 0; }
+
+        int Right() const { return x + w - 1; }
+        int Bottom() const { return y + h - 1; }
+
+        /// \brief The part of this rectangle that is also in \p other. Empty if they do not
+        ///        overlap, which is the answer a caller wants: nothing was touched.
+        Rect IntersectedWith(const Rect& other) const
+        {
+            if (IsEmpty() || other.IsEmpty())
+            {
+                return {};
+            }
+
+            const int left   = std::max(x, other.x);
+            const int top    = std::max(y, other.y);
+            const int right  = std::min(Right(), other.Right());
+            const int bottom = std::min(Bottom(), other.Bottom());
+
+            if (right < left || bottom < top)
+            {
+                return {};
+            }
+
+            return Rect{left, top, right - left + 1, bottom - top + 1};
+        }
+
+        /// \brief The smallest rectangle containing both. An empty one contributes nothing,
+        ///        so accumulating from Rect{} works without a "first time" special case.
+        Rect UnitedWith(const Rect& other) const
+        {
+            if (IsEmpty())
+            {
+                return other;
+            }
+
+            if (other.IsEmpty())
+            {
+                return *this;
+            }
+
+            const int left   = std::min(x, other.x);
+            const int top    = std::min(y, other.y);
+            const int right  = std::max(Right(), other.Right());
+            const int bottom = std::max(Bottom(), other.Bottom());
+
+            return Rect{left, top, right - left + 1, bottom - top + 1};
+        }
     };
 
     /// \brief A point, in pixels.
@@ -370,6 +421,9 @@ namespace acrion::image::drawing
     /// number of pixels, and an astro frame has millions of them.
     ///
     /// \param tolerance in the units of the pixel type, so 0 fills only exactly equal pixels.
+    /// \param bounds if given, receives the smallest rectangle containing every pixel that
+    ///        was changed - a flood fill is the one shape whose extent cannot be predicted
+    ///        from its arguments, so it has to be measured while filling.
     /// \return the number of pixels filled, which lets a caller tell "nothing to do" from
     ///         "filled the whole image" - the two outcomes a wrong tolerance produces.
     template <typename T>
@@ -378,7 +432,8 @@ namespace acrion::image::drawing
                      const int            y,
                      const Color<T>&      color,
                      const double         tolerance = 0.0,
-                     const Rect&          clip      = {})
+                     const Rect&          clip      = {},
+                     Rect*                bounds    = nullptr)
     {
         if (x < 0 || y < 0 || x >= data.Width() || y >= data.Height())
         {
@@ -430,6 +485,11 @@ namespace acrion::image::drawing
 
             data.Plot(px, py, color);
             ++filled;
+
+            if (bounds)
+            {
+                *bounds = bounds->UnitedWith(Rect{px, py, 1, 1});
+            }
 
             pending.push_back({px + 1, py});
             pending.push_back({px - 1, py});
