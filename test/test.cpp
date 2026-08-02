@@ -312,3 +312,130 @@ TEST(InterpolationTest, ClampsCoordinatesToTheGivenBounds)
     EXPECT_EQ((int)interpolation::Do<Scalar>(-5.0, -5.0, 0, 0, 1, 1, get), 10);
     EXPECT_EQ((int)interpolation::Do<Scalar>(7.0, 9.0, 0, 0, 1, 1, get), 40);
 }
+
+// ConvertToDepth8 is the display path: acrionphoto calls it for every image it shows, at
+// every zoom level. It had no tests, and BUG-20 - four-channel colours rotated by one - lived
+// partly in it. The buffer it returns is a raw new[], so each case deletes it.
+
+namespace
+{
+    /// \brief A greyscale bitmap whose pixel values are their own x coordinate.
+    BitmapData<uint8_t> GrayRamp(const int width, const int height)
+    {
+        BitmapData<uint8_t> data(width, height, 1);
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                data.Plot(x, y, Color<uint8_t>(static_cast<uint8_t>(x)));
+            }
+        }
+        return data;
+    }
+}
+
+TEST(ConvertToDepth8Test, MapsTheBrightnessRangeOntoTheFullByteRange)
+{
+    // What the two brightness sliders in acrionphoto do: the displayed range is stretched
+    // over 0..255, everything below or above is clamped. Getting this wrong makes every
+    // astro image either black or blown out, which is the first thing a user would see.
+    BitmapData<uint8_t> data = GrayRamp(8, 1);
+    data.SetBrightnessRangeForDisplay(2, 6);
+
+    uint8_t* display = data.ConvertToDepth8();
+    ASSERT_NE(display, nullptr);
+
+    EXPECT_EQ(display[0], 0) << "below the range clamps to black";
+    EXPECT_EQ(display[2], 0) << "the lower bound is black";
+    EXPECT_EQ(display[6], 255) << "the upper bound is white";
+    EXPECT_EQ(display[7], 255) << "above the range clamps to white";
+    EXPECT_EQ(display[4], 128) << "the middle lands in the middle";
+
+    delete[] display;
+}
+
+TEST(ConvertToDepth8Test, ProducesBgraForColourImages)
+{
+    // The display buffer is BGRA, which is what Qt expects, while the container is RGBA.
+    // A swap here shows up as red and blue exchanged in the whole application.
+    BitmapData<uint8_t> data(1, 1, 3);
+    data.SetBrightnessRangeForDisplay(0, 255);
+    data.Plot(0, 0, Color<uint8_t>(10, 20, 30));
+
+    uint8_t* display = data.ConvertToDepth8();
+    ASSERT_NE(display, nullptr);
+
+    EXPECT_EQ(display[0], 30) << "blue first";
+    EXPECT_EQ(display[1], 20) << "then green";
+    EXPECT_EQ(display[2], 10) << "then red";
+    EXPECT_EQ(display[3], 255) << "opaque, since the source has no alpha";
+
+    delete[] display;
+}
+
+TEST(ConvertToDepth8Test, KeepsAlphaOfFourChannelImages)
+{
+    // The four-channel counterpart of the case above. Before BUG-20 was fixed this produced
+    // alpha where blue belongs and red where alpha belongs.
+    BitmapData<uint8_t> data(1, 1, 4);
+    data.SetBrightnessRangeForDisplay(0, 255);
+
+    uint8_t* raw = data.Buffer();
+    raw[0]       = 10; // R
+    raw[1]       = 20; // G
+    raw[2]       = 30; // B
+    raw[3]       = 40; // A
+
+    uint8_t* display = data.ConvertToDepth8();
+    ASSERT_NE(display, nullptr);
+
+    EXPECT_EQ(display[0], 30);
+    EXPECT_EQ(display[1], 20);
+    EXPECT_EQ(display[2], 10);
+    EXPECT_EQ(display[3], 40);
+
+    delete[] display;
+}
+
+TEST(ConvertToDepth8Test, PadsGreyscaleRowsToAFourByteBoundary)
+{
+    // Greyscale display rows are aligned to four bytes, which is what the caller has to
+    // assume when it walks the buffer. With a width of 5 that means a stride of 8, and the
+    // second row starts there rather than at 5.
+    BitmapData<uint8_t> data = GrayRamp(5, 2);
+    data.SetBrightnessRangeForDisplay(0, 4);
+
+    uint8_t* display = data.ConvertToDepth8();
+    ASSERT_NE(display, nullptr);
+
+    EXPECT_EQ(display[0], 0);
+    EXPECT_EQ(display[4], 255);
+    EXPECT_EQ(display[8], 0) << "second row starts at the aligned offset, not at 5";
+    EXPECT_EQ(display[12], 255);
+
+    delete[] display;
+}
+
+TEST(ConvertToDepth8Test, ConvertsOnlyTheRequestedRectangle)
+{
+    // Panning and zooming ask for a sub rectangle rather than the whole image.
+    BitmapData<uint8_t> data = GrayRamp(8, 4);
+    data.SetBrightnessRangeForDisplay(0, 7);
+
+    uint8_t* display = data.ConvertToDepth8(0, 4, 1, 4, 2);
+    ASSERT_NE(display, nullptr);
+
+    // x = 4..7 of a ramp whose value is its x coordinate, stretched over 0..7 -> 145..255
+    EXPECT_EQ(display[0], static_cast<uint8_t>(std::lround(255.0 * 4 / 7)));
+    EXPECT_EQ(display[3], 255);
+
+    delete[] display;
+}
+
+TEST(ConvertToDepth8Test, RefusesAnUnsupportedChannelCount)
+{
+    // Init() already rejects anything but 1..4, so a bitmap with five channels cannot be
+    // constructed - which is the real guarantee, and worth pinning where a reader might
+    // otherwise be tempted to pass an arbitrary channel count through.
+    EXPECT_THROW(BitmapData<uint8_t>(2, 2, 5), std::runtime_error);
+}
