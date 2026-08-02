@@ -727,3 +727,93 @@ TEST(ConvertToDepth8Test, RefusesAnUnsupportedChannelCount)
     // otherwise be tempted to pass an arbitrary channel count through.
     EXPECT_THROW(BitmapData<uint8_t>(2, 2, 5), std::runtime_error);
 }
+
+// The three places the integer assumption of BUG-29 and BUG-31 still sat, plus the last
+// unsynchronised omp loop. None of them had a caller in this workspace, which is the only
+// reason they were not defects with a reproduction - they were traps waiting for one.
+
+TEST(BoundedArithmeticTest, AFloatingPointValueKeepsItsFraction)
+{
+    // utility::BoundedAdd ended in static_cast<T>(static_cast<int64_t>(a) + b), which threw
+    // away the fractional part of `a` before adding anything to it.
+    Color<double> colour(0.8, 0.3, 0.25);
+    colour += 0.1L;
+
+    EXPECT_NEAR(colour.Red(), 0.9, 1e-12);
+    EXPECT_NEAR(colour.Green(), 0.4, 1e-12);
+    EXPECT_NEAR(colour.Blue(), 0.35, 1e-12);
+
+    colour -= 0.1L;
+    EXPECT_NEAR(colour.Red(), 0.8, 1e-12);
+}
+
+TEST(BoundedArithmeticTest, SaturationStillHoldsAtBothEnds)
+{
+    Color<uint8_t> bright(250, 250, 250);
+    bright += 20.0L;
+    EXPECT_EQ(bright.Red(), 255);
+
+    Color<uint8_t> dark(5, 5, 5);
+    dark -= 20.0L;
+    EXPECT_EQ(dark.Red(), 0);
+
+    // 64 bit is where the int64_t cast wrapped.
+    constexpr uint64_t max = std::numeric_limits<uint64_t>::max();
+    Color<uint64_t>    wide(max - 10, max - 10, max - 10);
+    wide += 100.0L;
+    EXPECT_EQ(wide.Red(), max);
+}
+
+TEST(BoundedArithmeticTest, AnIntegerSumIsRoundedRatherThanTruncated)
+{
+    Color<uint8_t> colour(10, 10, 10);
+    colour += 1.6L;
+    EXPECT_EQ(colour.Red(), 12); // 11.6 rounds to 12
+}
+
+TEST(ColorScalingTest, AnIntegerComponentIsRoundedAndNeverNegative)
+{
+    Color<uint8_t> colour(100, 50, 20);
+    colour *= 3; // 300 saturates, 150 and 60 do not
+    EXPECT_EQ(colour.Red(), 255);
+    EXPECT_EQ(colour.Green(), 150);
+    EXPECT_EQ(colour.Blue(), 60);
+}
+
+TEST(ColorScalingTest, AFloatingPointComponentIsNeitherRoundedNorClamped)
+{
+    Color<double> colour(0.8, 0.3, -0.2);
+    colour *= 0.5;
+
+    EXPECT_NEAR(colour.Red(), 0.4, 1e-12);
+    EXPECT_NEAR(colour.Green(), 0.15, 1e-12);
+    EXPECT_NEAR(colour.Blue(), -0.1, 1e-12); // a calibrated frame has negative pixels
+}
+
+TEST(BelowTest, ReportsWhetherTheNeighbourhoodStaysUnderTheProfile)
+{
+    // BitmapData::Below tests every pixel within a radius against a radial profile scaled by
+    // the brightness at the centre. It had a plain `bool` written from every thread of an omp
+    // loop - a data race, though a benign-looking one, since the flag only ever goes from
+    // true to false. It is std::atomic now.
+    //
+    // It also had no caller anywhere in the workspace, and therefore no test. Both of those
+    // are now untrue.
+    const std::vector<double> profile{1.0, 0.5, 0.25, 0.125, 0.0625};
+
+    BitmapData<uint8_t> data(9, 9, 1);
+    data.Set(Color<uint8_t>(10));
+    data.Plot(4, 4, Color<uint8_t>(100));
+
+    // Everything around it is far below the profile.
+    EXPECT_TRUE(data.Below(4, 4, 3.0, profile, 0));
+
+    // One neighbour at distance 1 brighter than ceil(100 * 0.5) is not.
+    data.Plot(5, 4, Color<uint8_t>(90));
+    EXPECT_FALSE(data.Below(4, 4, 3.0, profile, 0));
+
+    // ...and it is only about the pixels within the radius.
+    data.Plot(5, 4, Color<uint8_t>(10));
+    data.Plot(8, 4, Color<uint8_t>(90));
+    EXPECT_TRUE(data.Below(4, 4, 3.0, profile, 0));
+}

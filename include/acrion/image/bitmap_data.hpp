@@ -35,6 +35,7 @@ along with acrion image. If not, see <https://www.gnu.org/licenses/>.
 
 // #include <opencv2/opencv.hpp>
 
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -703,7 +704,12 @@ namespace acrion::image
 
         bool Below(const int centerX, const int centerY, const double r, const std::vector<double>& distribution, const int centerOfDistribution) const
         {
-            bool result = true;
+            // Atomic because the loop below is an omp parallel one and every thread may write
+            // this - and the inner loop reads it as its own exit condition. The flag only ever
+            // goes from true to false, so the outcome was never in doubt, but a plain `bool`
+            // written from several threads is a data race and therefore undefined rather than
+            // merely unordered. The same shape as BUG-21, Q15 and BUG-32.
+            std::atomic<bool> result{true};
 
             const int x0 = std::max(0, (int)std::lround(centerX - r));
             const int y0 = std::max(0, (int)std::lround(centerY - r));

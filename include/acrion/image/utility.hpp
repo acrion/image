@@ -48,28 +48,6 @@ namespace acrion::image
 
 namespace acrion::image::utility
 {
-    template <typename T>
-    T BoundedAdd(const T& a, long double b)
-    {
-        if (b >= (long double)std::numeric_limits<T>::max() || (long double)a > std::numeric_limits<T>::max() - b)
-        {
-            return std::numeric_limits<T>::max();
-        }
-
-        if (b <= -(long double)std::numeric_limits<T>::max() || (long double)a < std::numeric_limits<T>::lowest() - b)
-        {
-            return std::numeric_limits<T>::lowest();
-        }
-
-        return static_cast<T>(static_cast<int64_t>(a) + b);
-    }
-
-    template <typename T>
-    T BoundedSub(const T& a, long double b)
-    {
-        return BoundedAdd(a, -b);
-    }
-
     inline int msb(const uint8_t value)
     {
         return (int)(std::ceil(std::log2(value)));
@@ -155,5 +133,40 @@ namespace acrion::image::utility
 
             return Convert<T>(value);
         }
+    }
+
+    /// \brief \p a + \p b, saturating at the limits of \p T.
+    ///
+    /// \details The sum is formed in `long double`, whose 64 bit mantissa holds the maximum of
+    /// `uint64_t` exactly, and converted back through Convert - which rounds an integer pixel
+    /// and leaves a floating point one alone.
+    ///
+    /// It used to end in `static_cast<T>(static_cast<int64_t>(a) + b)`. That truncated the
+    /// fractional part of a floating point pixel before adding anything to it, so
+    /// `Color<double>(0.8, 0.3, 0.3) += 0.1` gave 0.1 rather than 0.9, and for `uint64_t` the
+    /// cast wrapped. The same integer assumption as BUG-29 and BUG-31; unreachable here only
+    /// because nothing calls Color's scalar operators today.
+    template <typename T>
+    T BoundedAdd(const T& a, long double b)
+    {
+        const long double sum = (long double)a + b;
+
+        if (sum >= (long double)std::numeric_limits<T>::max())
+        {
+            return std::numeric_limits<T>::max();
+        }
+
+        if (sum <= (long double)std::numeric_limits<T>::lowest())
+        {
+            return std::numeric_limits<T>::lowest();
+        }
+
+        return Convert<T>(sum);
+    }
+
+    template <typename T>
+    T BoundedSub(const T& a, long double b)
+    {
+        return BoundedAdd(a, -b);
     }
 }

@@ -185,16 +185,18 @@ namespace acrion::image
             return *this; // return the result by reference
         }
 
+        /// \brief Scales the three colour components, saturating at the limits of T.
+        ///
+        /// \details Through utility::ToPixel, so an integer component is rounded rather than
+        /// truncated and cannot go below zero, and a floating point one is neither. It used to
+        /// clamp only upwards and to truncate: scaling an 8 bit component of 100 by a factor
+        /// that landed on 149.9 gave 149, and a negative factor produced whatever the cast to
+        /// an unsigned type made of a negative number.
         Color& operator*=(T rhs) // compound assignment (does not need to be a member,
         {                        // but often is, to modify the private members)
-            const long double red   = static_cast<long double>(_red) * rhs;
-            const long double green = static_cast<long double>(_green) * rhs;
-            const long double blue  = static_cast<long double>(_blue) * rhs;
-            const long double max   = (long double)std::numeric_limits<T>::max();
-
-            _red   = static_cast<T>(std::min(max, red));
-            _green = static_cast<T>(std::min(max, green));
-            _blue  = static_cast<T>(std::min(max, blue));
+            _red   = utility::ToPixel<T>(static_cast<long double>(_red) * rhs);
+            _green = utility::ToPixel<T>(static_cast<long double>(_green) * rhs);
+            _blue  = utility::ToPixel<T>(static_cast<long double>(_blue) * rhs);
 
             return *this; // return the result by reference
         }
