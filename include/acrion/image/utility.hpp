@@ -118,4 +118,42 @@ namespace acrion::image::utility
         static_assert(std::numeric_limits<T>::is_integer);
         return (T)std::llround(num);
     }
+
+    /// \brief Turns a computed value back into a pixel of type \p T.
+    ///
+    /// Integer pixels are clamped into the range of their type and rounded to the nearest
+    /// whole number; floating point ones are neither, and that difference is the whole point
+    /// of this function:
+    ///
+    /// - a floating point image has no type range to clamp against, and rounding one to
+    ///   whole numbers leaves a FITS frame scaled to [0, 1] with two brightness levels;
+    /// - its pixels may legitimately be negative, because subtracting a dark frame puts the
+    ///   background below zero - clamping that at zero would raise it back to black.
+    ///
+    /// The comparison is made in `long double`, whose 64 bit mantissa holds the maximum of
+    /// `uint64_t` exactly. `int64_t` does not: written that way the clamp for a 64 bit image
+    /// wraps to -1, and for a floating point one it is undefined outright. Both of those
+    /// were real defects (imago BUG-29), which is why this lives in one place now.
+    template <typename T>
+    T ToPixel(const long double value)
+    {
+        if constexpr (std::is_floating_point_v<T>)
+        {
+            return Convert<T>(value);
+        }
+        else
+        {
+            if (value <= 0)
+            {
+                return T{0};
+            }
+
+            if (value >= (long double)std::numeric_limits<T>::max())
+            {
+                return std::numeric_limits<T>::max();
+            }
+
+            return Convert<T>(value);
+        }
+    }
 }

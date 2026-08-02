@@ -213,6 +213,154 @@ TEST(ImageFrameworkTest, WithBrightnessPlausible)
     EXPECT_LT(col1b.Blue(), col1.Blue());
 }
 
+// Colour arithmetic on floating point pixels.
+//
+// Color<T> is a template over all five pixel types, but two of its members were written as
+// if T were always an integer: Gray() and WithBrightness() both ended in std::llround(), and
+// WithBrightness() clamped against numeric_limits<T>::max(). For T = double that rounds a
+// FITS frame scaled to [0, 1] to two brightness levels, and the clamp is meaningless. The
+// gray branch of Gray() returns its value untouched and hid this: it is only reached by a
+// *coloured* pixel, and today only the FITS reader produces floating point images, always
+// with a single channel.
+//
+// The cases below assert properties rather than re-deriving the YUV matrix: a colour must
+// survive a round trip through its own brightness, and the brightness that was asked for
+// must be the brightness that comes back.
+
+TEST(ColorFloatingPointTest, GrayOfAColouredPixelKeepsItsFraction)
+{
+    const Color<double> colour(0.8, 0.3, 0.3);
+
+    // 0.299 * 0.8 + 0.587 * 0.3 + 0.114 * 0.3, written out rather than recomputed.
+    EXPECT_NEAR(colour.Gray(), 0.4495, 1e-9);
+}
+
+TEST(ColorFloatingPointTest, GrayOfAGrayPixelIsTheValueItself)
+{
+    // The branch that always worked, pinned so that a fix to the other one cannot break it.
+    EXPECT_EQ(Color<double>(0.8).Gray(), 0.8);
+}
+
+namespace
+{
+    /// How exactly a colour comes back from YUV and returns. The forward and inverse
+    /// coefficients are both rounded to five decimals and are not exact inverses of each
+    /// other, so the round trip is off by about 1.4e-5 of the value range - measured, not
+    /// assumed. For an 8 bit image that is a thousandth of one count, which is why the
+    /// integer tests above can afford to compare within 1.
+    constexpr double kYuvRoundTrip = 1e-4;
+}
+
+TEST(ColorFloatingPointTest, AColourSurvivesARoundTripThroughItsOwnBrightness)
+{
+    const Color<double> colour(0.8, 0.3, 0.25);
+    const Color<double> result = colour.WithBrightness(colour.Gray());
+
+    EXPECT_NEAR(result.Red(), colour.Red(), kYuvRoundTrip);
+    EXPECT_NEAR(result.Green(), colour.Green(), kYuvRoundTrip);
+    EXPECT_NEAR(result.Blue(), colour.Blue(), kYuvRoundTrip);
+}
+
+TEST(ColorFloatingPointTest, WithBrightnessDeliversTheBrightnessItWasAskedFor)
+{
+    const Color<double> colour(0.8, 0.3, 0.25);
+    const Color<double> darker = colour.WithBrightness(0.2);
+
+    EXPECT_NEAR(darker.Gray(), 0.2, kYuvRoundTrip);
+    EXPECT_LT(darker.Red(), colour.Red());
+    EXPECT_LT(darker.Green(), colour.Green());
+    EXPECT_LT(darker.Blue(), colour.Blue());
+}
+
+TEST(ColorFloatingPointTest, NegativeComponentsAreNotClampedAway)
+{
+    // Subtracting a dark frame puts the background of a calibrated frame below zero, and
+    // FITS keeps it there. Clamping at zero - right for every integer type, which cannot
+    // represent it - would raise that background back to black.
+    const Color<double> colour(-0.2, -0.5, -0.4);
+    const Color<double> result = colour.WithBrightness(colour.Gray());
+
+    EXPECT_LT(colour.Gray(), 0.0);
+    EXPECT_NEAR(result.Red(), colour.Red(), kYuvRoundTrip);
+    EXPECT_NEAR(result.Green(), colour.Green(), kYuvRoundTrip);
+    EXPECT_NEAR(result.Blue(), colour.Blue(), kYuvRoundTrip);
+}
+
+TEST(ColorIntegerTest, GrayStillRoundsToTheNearestWholeNumber)
+{
+    // The integer behaviour must not move: 0.299 * 192 + 0.587 * 160 + 0.114 * 96 = 162.272.
+    EXPECT_EQ(Color<uint8_t>(192, 160, 96).Gray(), 162);
+}
+
+TEST(ColorIntegerTest, GrayOfA64BitColourDoesNotWrap)
+{
+    // The maximum of uint64_t does not fit into an int64_t, and the weighted sum of a bright
+    // 64 bit colour exceeds the range of one: std::llround() on it is undefined.
+    constexpr uint64_t max  = std::numeric_limits<uint64_t>::max();
+    const uint64_t     gray = Color<uint64_t>(max, max / 2, max / 2).Gray();
+
+    EXPECT_GT(gray, max / 2);
+    EXPECT_LT(gray, max);
+    EXPECT_NEAR((double)gray, 1.1981e19, 1e16); // 0.299 * max + 0.701 * max / 2
+}
+
+TEST(ColorIntegerTest, WithBrightnessStillClampsToTheRangeOfTheType)
+{
+    const Color<uint8_t> saturated(255, 0, 0);
+
+    // Upwards: the red component of the reconstruction overshoots 255 by far.
+    const Color<uint8_t> bright = saturated.WithBrightness(255);
+    EXPECT_EQ(bright.Red(), 255);
+
+    // Downwards: green and blue come out negative, and must arrive at zero rather than
+    // wrapping around into a bright value.
+    const Color<uint8_t> dark = saturated.WithBrightness(0);
+    EXPECT_EQ(dark.Green(), 0);
+    EXPECT_EQ(dark.Blue(), 0);
+}
+
+// AbsoluteDiff is the same defect one level up: it computes the difference between two
+// images through int64_t. acrionphoto's difference view calls it, and it is instantiated for
+// double, so on two FITS frames every fractional difference truncated to zero.
+
+TEST(AbsoluteDiffTest, KeepsFractionalDifferences)
+{
+    BitmapData<double> left(2, 2, 1);
+    BitmapData<double> right(2, 2, 1);
+    left.Set(Color<double>(0.8));
+    right.Set(Color<double>(0.3));
+
+    const auto difference = left.AbsoluteDiff(right);
+    EXPECT_NEAR(difference->GetGray(0, 0), 0.5, 1e-12);
+
+    // ...in both directions: the result is an absolute value.
+    const auto reversed = right.AbsoluteDiff(left);
+    EXPECT_NEAR(reversed->GetGray(0, 0), 0.5, 1e-12);
+}
+
+TEST(AbsoluteDiffTest, IntegerImagesAreUnchanged)
+{
+    BitmapData<uint16_t> left(2, 2, 1);
+    BitmapData<uint16_t> right(2, 2, 1);
+    left.Set(Color<uint16_t>(1000));
+    right.Set(Color<uint16_t>(300));
+
+    EXPECT_EQ(left.AbsoluteDiff(right)->GetGray(1, 1), 700);
+    EXPECT_EQ(right.AbsoluteDiff(left)->GetGray(1, 1), 700);
+}
+
+TEST(AbsoluteDiffTest, A64BitDifferenceDoesNotWrap)
+{
+    constexpr uint64_t max = std::numeric_limits<uint64_t>::max();
+
+    BitmapData<uint64_t> left(2, 2, 1);
+    BitmapData<uint64_t> right(2, 2, 1);
+    left.Set(Color<uint64_t>(max));
+    right.Set(Color<uint64_t>(1));
+
+    EXPECT_EQ(left.AbsoluteDiff(right)->GetGray(0, 0), max - 1);
+}
+
 // interpolation::Do is what acrion imago samples its corrected images with, so it decides
 // the visual quality of the product that is meant to be sold - and it had no tests. The
 // scheme is a hand-rolled distance weighting rather than a textbook bilinear one, which is

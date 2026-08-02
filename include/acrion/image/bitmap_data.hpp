@@ -1002,10 +1002,13 @@ namespace acrion::image
                 {
                     for (int k = 0; k < _channels; ++k)
                     {
-                        int64_t left  = (int64_t)d[k];
-                        int64_t right = (int64_t)e[k];
-                        int64_t abs   = std::abs(left - right);
-                        r[k]          = static_cast<T>(std::min(static_cast<int64_t>(std::numeric_limits<T>::max()), std::max(static_cast<int64_t>(0), abs)));
+                        // In long double, not int64_t. int64_t cannot hold a 64 bit pixel
+                        // (the maximum of uint64_t wraps to -1, and so did the clamp built
+                        // from it), and casting a floating point pixel to it truncates the
+                        // fraction - so the difference of two FITS frames scaled to [0, 1]
+                        // came out as an empty image. The same defect as imago's BUG-29.
+                        const long double difference = (long double)d[k] - (long double)e[k];
+                        r[k]                         = utility::ToPixel<T>(difference < 0 ? -difference : difference);
                     }
                 }
             }

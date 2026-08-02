@@ -76,10 +76,16 @@ namespace acrion::image
             return _alpha;
         }
 
+        /// \brief The luma of this colour, in the units of the pixel type.
+        ///
+        /// A gray pixel answers with its own value. A coloured one is weighted by the BT.601
+        /// coefficients and converted back through utility::ToPixel, which rounds an integer
+        /// pixel and leaves a floating point one alone - the latter used to be rounded too,
+        /// so the luma of any coloured pixel of a floating point image was 0 or 1.
         T Gray() const
         {
             return _red == _green && _red == _blue ? _red
-                                                   : static_cast<T>(std::llround(0.299 * _red + 0.587 * _green + 0.114 * _blue));
+                                                   : utility::ToPixel<T>(0.299 * _red + 0.587 * _green + 0.114 * _blue);
         }
 
         bool IsColored() const
@@ -87,6 +93,13 @@ namespace acrion::image
             return _red != _green || _red != _blue;
         }
 
+        /// \brief This colour with its luma replaced by \p Y, keeping hue and saturation.
+        ///
+        /// A gray pixel simply becomes \p Y. A coloured one goes through YUV, and the three
+        /// reconstructed components are turned back into pixels by utility::ToPixel: an
+        /// integer image is clamped into the range of its type - the reconstruction
+        /// overshoots it easily - while a floating point image is neither clamped nor
+        /// rounded, because it has no such range and its pixels may be negative.
         Color<T> WithBrightness(const T Y) const
         {
             if (IsColored())
@@ -98,9 +111,9 @@ namespace acrion::image
                 const double green = Y - 0.39465 * U - 0.58060 * V;
                 const double blue  = Y + 2.03211 * U;
 
-                return Color<T>(static_cast<T>(std::llround(std::min(std::max(red, 0.0), (double)std::numeric_limits<T>::max()))),
-                                static_cast<T>(std::llround(std::min(std::max(green, 0.0), (double)std::numeric_limits<T>::max()))),
-                                static_cast<T>(std::llround(std::min(std::max(blue, 0.0), (double)std::numeric_limits<T>::max()))),
+                return Color<T>(utility::ToPixel<T>(red),
+                                utility::ToPixel<T>(green),
+                                utility::ToPixel<T>(blue),
                                 _alpha);
             }
             else
