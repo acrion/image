@@ -27,8 +27,11 @@ along with acrion image. If not, see <https://www.gnu.org/licenses/>.
 
 #include "acrion/image/bitmap.hpp"
 #include "acrion/image/color.hpp"
+#include "acrion/image/interpolation.hpp"
+#include "acrion/image/mixable_scalar.hpp"
 
 #include <string>
+#include <tuple>
 #include <vector>
 
 using namespace acrion::image;
@@ -208,4 +211,104 @@ TEST(ImageFrameworkTest, WithBrightnessPlausible)
     EXPECT_LT(col1b.Red(), col1.Red());
     EXPECT_LT(col1b.Green(), col1.Green());
     EXPECT_LT(col1b.Blue(), col1.Blue());
+}
+
+// interpolation::Do is what acrion imago samples its corrected images with, so it decides
+// the visual quality of the product that is meant to be sold - and it had no tests. The
+// scheme is a hand-rolled distance weighting rather than a textbook bilinear one, which is
+// exactly the kind of code where a normalisation slip produces output that still looks
+// plausible. The cases below therefore assert invariants that must hold whatever the
+// weighting does, instead of re-deriving its arithmetic.
+
+namespace
+{
+    using Scalar = MixableScalar<int>;
+
+    /// A 2x2 neighbourhood with the given corner values, as interpolation::Do expects it.
+    interpolation::Getter<Scalar> Corners(const int topLeft, const int topRight, const int bottomLeft, const int bottomRight)
+    {
+        return [=](const int x, const int y) -> Scalar
+        {
+            if (x <= 0) return Scalar(y <= 0 ? topLeft : bottomLeft);
+            return Scalar(y <= 0 ? topRight : bottomRight);
+        };
+    }
+}
+
+TEST(InterpolationTest, ReturnsTheSampleItselfOnAGridPoint)
+{
+    // No interpolation is due at an integral coordinate, so any deviation is pure error.
+    const auto get = Corners(10, 20, 30, 40);
+
+    EXPECT_EQ((int)interpolation::Do<Scalar>(0.0, 0.0, 0, 0, 1, 1, get), 10);
+    EXPECT_EQ((int)interpolation::Do<Scalar>(1.0, 0.0, 0, 0, 1, 1, get), 20);
+    EXPECT_EQ((int)interpolation::Do<Scalar>(0.0, 1.0, 0, 0, 1, 1, get), 30);
+    EXPECT_EQ((int)interpolation::Do<Scalar>(1.0, 1.0, 0, 0, 1, 1, get), 40);
+}
+
+TEST(InterpolationTest, AUniformNeighbourhoodStaysUniform)
+{
+    // The strongest invariant available for a weighting scheme: if all four samples agree,
+    // the result must be that value everywhere, because the weights have to sum to one.
+    // A normalisation error shows up here immediately and nowhere else so clearly.
+    const auto get = Corners(123, 123, 123, 123);
+
+    for (double dy = 0.0; dy <= 1.0; dy += 0.125)
+    {
+        for (double dx = 0.0; dx <= 1.0; dx += 0.125)
+        {
+            EXPECT_EQ((int)interpolation::Do<Scalar>(dx, dy, 0, 0, 1, 1, get), 123)
+                << "at " << dx << "," << dy;
+        }
+    }
+}
+
+TEST(InterpolationTest, NeverOvershootsTheSurroundingSamples)
+{
+    // An interpolated value outside the range of its neighbours is an artefact - in an
+    // astrophotograph, a bright rim around every corrected star.
+    const auto get = Corners(0, 255, 40, 200);
+
+    for (double dy = 0.0; dy <= 1.0; dy += 0.0625)
+    {
+        for (double dx = 0.0; dx <= 1.0; dx += 0.0625)
+        {
+            const int value = interpolation::Do<Scalar>(dx, dy, 0, 0, 1, 1, get);
+            EXPECT_GE(value, 0) << "at " << dx << "," << dy;
+            EXPECT_LE(value, 255) << "at " << dx << "," << dy;
+        }
+    }
+}
+
+TEST(InterpolationTest, InterpolatesAlongAnEdge)
+{
+    // With one coordinate integral the problem is one-dimensional, so the answer is not a
+    // matter of the weighting scheme: halfway between 0 and 200 is 100.
+    const auto get = Corners(0, 200, 0, 200);
+
+    EXPECT_EQ((int)interpolation::Do<Scalar>(0.5, 0.0, 0, 0, 1, 1, get), 100);
+    EXPECT_EQ((int)interpolation::Do<Scalar>(0.25, 0.0, 0, 0, 1, 1, get), 50);
+    EXPECT_EQ((int)interpolation::Do<Scalar>(0.75, 0.0, 0, 0, 1, 1, get), 150);
+}
+
+TEST(InterpolationTest, IsSymmetricAboutTheCentre)
+{
+    // Two samples opposite each other, sampled at the centre: neither may be preferred.
+    // An asymmetry here would shift a corrected image by a fraction of a pixel.
+    const auto horizontal = Corners(0, 100, 0, 100);
+    const auto vertical   = Corners(0, 0, 100, 100);
+
+    EXPECT_EQ((int)interpolation::Do<Scalar>(0.5, 0.5, 0, 0, 1, 1, horizontal),
+              (int)interpolation::Do<Scalar>(0.5, 0.5, 0, 0, 1, 1, vertical));
+    EXPECT_EQ((int)interpolation::Do<Scalar>(0.5, 0.5, 0, 0, 1, 1, horizontal), 50);
+}
+
+TEST(InterpolationTest, ClampsCoordinatesToTheGivenBounds)
+{
+    // imago samples along a distortion model, which can point outside the image. Clamping is
+    // what keeps that from reading out of bounds.
+    const auto get = Corners(10, 20, 30, 40);
+
+    EXPECT_EQ((int)interpolation::Do<Scalar>(-5.0, -5.0, 0, 0, 1, 1, get), 10);
+    EXPECT_EQ((int)interpolation::Do<Scalar>(7.0, 9.0, 0, 0, 1, 1, get), 40);
 }
