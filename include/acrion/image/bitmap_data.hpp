@@ -97,11 +97,6 @@ namespace acrion::image
     class BitmapData
     {
     public:
-        /// \brief The pixel type, so that generic code over the five instantiations can name
-        ///        it - a plugin dispatching a message over all depths gets a `BitmapData<T>&`
-        ///        and needs `T` to build a Color for it.
-        using value_type = T;
-
         BitmapData() = default;
         BitmapData(int width, int height, int channels)
             : _width(width)
