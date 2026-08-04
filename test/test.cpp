@@ -30,9 +30,12 @@ along with acrion image. If not, see <https://www.gnu.org/licenses/>.
 #include "acrion/image/interpolation.hpp"
 #include "acrion/image/mixable_scalar.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 using namespace acrion::image;
@@ -599,6 +602,136 @@ TEST(InterpolationTest, ClampsCoordinatesToTheGivenBounds)
 
     EXPECT_EQ((int)interpolation::Do<Scalar>(-5.0, -5.0, 0, 0, 1, 1, get), 10);
     EXPECT_EQ((int)interpolation::Do<Scalar>(7.0, 9.0, 0, 0, 1, 1, get), 40);
+}
+
+// SampleLine is how acrion imago integrates along its correction direction: it reads a line
+// through the image and reduces the values on it to a darkest sample and a monotonicity
+// measure. Both of those are only as continuous as the set of sample positions is, and that
+// is what BUG-37 was: the count was ceil(length), so it jumped by one every time the line
+// grew past an integer, and a sample appeared in the middle of the line out of nowhere. Since
+// the length is |v| * intensity, the locus of such a jump is a contour of constant |v| - a
+// visible arc across the corrected photograph, on either side of which the correction differs.
+//
+// The cases below assert the contract of the sampler itself rather than any image content,
+// because the property that was violated is a property of the positions.
+
+namespace
+{
+    /// The positions SampleLine visits, in the order it visits them.
+    std::vector<std::pair<double, double>> SamplePositions(const BitmapData<uint16_t>& img,
+                                                           const double                x0,
+                                                           const double                y0,
+                                                           const double                x1,
+                                                           const double                y1)
+    {
+        std::vector<std::pair<double, double>> positions;
+
+        img.SampleLine(x0, y0, x1, y1, [&positions](const double x, const double y)
+                       {
+                           positions.emplace_back(x, y);
+                           return true;
+                       });
+
+        return positions;
+    }
+
+    /// How far the nearest position in \p b is from the position in \p a that is worst served
+    /// by it - one half of the Hausdorff distance between the two sample sets.
+    double WorstDistance(const std::vector<std::pair<double, double>>& a,
+                         const std::vector<std::pair<double, double>>& b)
+    {
+        double worst = 0.0;
+
+        for (const auto& p : a)
+        {
+            double nearest = std::numeric_limits<double>::max();
+
+            for (const auto& q : b)
+            {
+                nearest = std::min(nearest, std::hypot(p.first - q.first, p.second - q.second));
+            }
+
+            worst = std::max(worst, nearest);
+        }
+
+        return worst;
+    }
+
+    /// A line of the given length from (10, 10), in a direction that is neither axis aligned
+    /// nor diagonal, so that no sample lands on a grid point by accident.
+    std::vector<std::pair<double, double>> LineOfLength(const BitmapData<uint16_t>& img, const double length)
+    {
+        return SamplePositions(img, 10.0, 10.0, 10.0 + 0.6 * length, 10.0 + 0.8 * length);
+    }
+}
+
+TEST(SampleLineTest, StartsAtOneEndAndFinishesAtTheOther)
+{
+    // The two ends are the only positions the caller named, so they are the two that must be
+    // read exactly rather than approximately. imago's correction takes the darkest sample on
+    // the line, and the ends are where the distortion model says the light came from.
+    BitmapData<uint16_t> img(32, 32, 1);
+    img.Set(Color<uint16_t>(0));
+
+    for (const double length : {0.0, 0.4, 1.0, 3.7, 9.0})
+    {
+        const auto positions = LineOfLength(img, length);
+
+        ASSERT_FALSE(positions.empty()) << "at length " << length;
+        EXPECT_NEAR(positions.front().first, 10.0, 1e-9) << "at length " << length;
+        EXPECT_NEAR(positions.front().second, 10.0, 1e-9) << "at length " << length;
+        EXPECT_NEAR(positions.back().first, 10.0 + 0.6 * length, 1e-9) << "at length " << length;
+        EXPECT_NEAR(positions.back().second, 10.0 + 0.8 * length, 1e-9) << "at length " << length;
+    }
+}
+
+TEST(SampleLineTest, ReadsAtLeastOnceEveryPixel)
+{
+    // A gap wider than a pixel would step over whatever lies between - for imago, over the
+    // dark side of a smeared star, which is the very thing it is looking for.
+    BitmapData<uint16_t> img(64, 64, 1);
+    img.Set(Color<uint16_t>(0));
+
+    for (double length = 0.0; length <= 12.0; length += 0.13)
+    {
+        const auto positions = LineOfLength(img, length);
+
+        for (size_t i = 1; i < positions.size(); ++i)
+        {
+            EXPECT_LE(std::hypot(positions[i].first - positions[i - 1].first,
+                                 positions[i].second - positions[i - 1].second),
+                      1.0 + 1e-9)
+                << "between sample " << i - 1 << " and " << i << " of a line of length " << length;
+        }
+    }
+}
+
+TEST(SampleLineTest, TheSampleSetFollowsTheEndpointContinuously)
+{
+    // BUG-37, and the reason it is asserted on the positions: everything imago derives from
+    // the line - the darkest value, the monotonicity weight - is a continuous function of the
+    // positions, so it can only jump if they do. Growing the line by a hundredth of a pixel
+    // may move each sample by at most that much, and may not conjure one up anywhere else.
+    //
+    // Before the fix this held everywhere except at an integral length, where the whole
+    // interior of the line was re-spaced and the worst distance rose to about half a pixel -
+    // fifty times the step that caused it.
+    BitmapData<uint16_t> img(64, 64, 1);
+    img.Set(Color<uint16_t>(0));
+
+    const double step = 0.01;
+
+    for (double length = 0.2; length < 10.0; length += step)
+    {
+        const auto before = LineOfLength(img, length);
+        const auto after  = LineOfLength(img, length + step);
+
+        // Both directions: a sample may neither appear out of nowhere nor vanish.
+        EXPECT_LE(WorstDistance(after, before), step * 1.001)
+            << "a sample appeared where there was none, growing the line from " << length;
+        EXPECT_LE(WorstDistance(before, after), step * 1.001)
+            << "a sample vanished, growing the line from " << length;
+    }
 }
 
 // ConvertToDepth8 is the display path: acrionphoto calls it for every image it shows, at

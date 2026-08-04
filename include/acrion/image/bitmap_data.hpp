@@ -57,8 +57,11 @@ namespace acrion::image
     inline uint8_t    _gammaTable[65536];
     inline std::mutex _mtx;
 
-    using Drawer  = std::function<bool(const int x, const int y)>;
-    using DrawerF = std::function<bool(const double x, const double y)>;
+    using Drawer = std::function<bool(const int x, const int y)>;
+
+    /// Receives the continuous positions of BitmapData::SampleLine, in the order they lie on
+    /// the line. Returning false stops the walk.
+    using SamplerF = std::function<bool(const double x, const double y)>;
 
     namespace
     {
@@ -822,26 +825,62 @@ namespace acrion::image
             }
         }
 
-        void Draw(const double x0, const double y0, const double x1, const double y1, const DrawerF& draw) const
+        /// \brief Reads the straight line from (\p x0, \p y0) to (\p x1, \p y1), about once per
+        ///        pixel, and hands every position to \p sample.
+        ///
+        /// \details This is the counterpart of Draw() for *integrating* along a line rather
+        /// than drawing one, and the distinction is not cosmetic. A rasteriser answers "which
+        /// pixels does this line touch", so it is right to snap it to the grid; an integration
+        /// asks "what does the image look like along here", and its answer has to vary
+        /// continuously as the line does, because whoever asked will feed it into a picture.
+        ///
+        /// The positions are therefore continuous coordinates, to be read with Get(double,
+        /// double), and they are placed at a **fixed spacing of one pixel** starting at
+        /// (\p x0, \p y0), with the far end always sampled as well - which is what makes the
+        /// set of positions a continuous function of the endpoint. Growing the line moves the
+        /// far sample; where that makes room for a further one, the new sample appears *at* the
+        /// far end, coinciding with the sample already there, rather than in the middle of the
+        /// line.
+        ///
+        /// ⚠️ Dividing the line into `ceil(length)` equal parts, which is the obvious way to
+        /// write this and the way it used to be written, does not have that property: the
+        /// interior of the line is re-spaced whenever the length passes an integer, and every
+        /// quantity derived from the samples jumps with it. In acrion imago the length is
+        /// proportional to the local distortion, so the jump ran along a contour of constant
+        /// distortion - a hard, curved seam across the corrected photograph, with an obviously
+        /// processed region on one side of it and an untouched one on the other. That was
+        /// BUG-37.
+        ///
+        /// \param sample Returning false stops the walk, as with Draw().
+        void SampleLine(const double x0, const double y0, const double x1, const double y1, const SamplerF& sample) const
         {
             const double len_x = x1 - x0;
             const double len_y = y1 - y0;
-            const int    len   = static_cast<int>(std::ceil(std::sqrt(len_x * len_x + len_y * len_y)));
+            const double len   = std::sqrt(len_x * len_x + len_y * len_y);
 
-            const double dx = len_x / len;
-            const double dy = len_y / len;
-            double       x  = x0;
-            double       y  = y0;
-
-            for (int i = 0; i <= len; ++i)
+            if (len > 0)
             {
-                if (!draw(x, y))
+                // One pixel along the line, in image coordinates.
+                const double dx = len_x / len;
+                const double dy = len_y / len;
+
+                // Whole pixels only. What is left over at the far end is covered by the final
+                // sample below, which is nearer to the last of these than a pixel - so the
+                // spacing never exceeds one, and no position is ever conjured up in between.
+                const int whole = static_cast<int>(len);
+
+                for (int i = 0; i <= whole; ++i)
                 {
-                    return;
+                    // From x0 rather than by accumulation: each position is then an exact
+                    // function of its index, and does not drift along a long line.
+                    if (!sample(x0 + i * dx, y0 + i * dy))
+                    {
+                        return;
+                    }
                 }
-                x += dx;
-                y += dy;
             }
+
+            sample(x1, y1);
         }
 
         void Draw(const int x0, const int y0, const Vector& v, const Color<T>& color) const
