@@ -461,7 +461,7 @@ namespace acrion::image
             // the samples overwrote each other and left holes that counted as zero. Both
             // numbers were wrong and neither was reproducible - measured on a 400x400
             // gradient, the average came out up to 5% beside the true one and differed
-            // between runs of the same image. acrion imago derives its star detection
+            // between runs of the same image. Straton derives its star detection
             // threshold from exactly these two values.
             //
             // Row sums rather than a lock, because a lock would fix the loss but not the
@@ -845,7 +845,7 @@ namespace acrion::image
         /// ⚠️ Dividing the line into `ceil(length)` equal parts, which is the obvious way to
         /// write this and the way it used to be written, does not have that property: the
         /// interior of the line is re-spaced whenever the length passes an integer, and every
-        /// quantity derived from the samples jumps with it. In acrion imago the length is
+        /// quantity derived from the samples jumps with it. In Straton the length is
         /// proportional to the local distortion, so the jump ran along a contour of constant
         /// distortion - a hard, curved seam across the corrected photograph, with an obviously
         /// processed region on one side of it and an untouched one on the other. That was
@@ -1101,7 +1101,7 @@ namespace acrion::image
                         // (the maximum of uint64_t wraps to -1, and so did the clamp built
                         // from it), and casting a floating point pixel to it truncates the
                         // fraction - so the difference of two FITS frames scaled to [0, 1]
-                        // came out as an empty image. The same defect as imago's BUG-29.
+                        // came out as an empty image. The same defect as Straton's BUG-29.
                         const long double difference = (long double)d[k] - (long double)e[k];
                         r[k]                         = utility::ToPixel<T>(difference < 0 ? -difference : difference);
                     }

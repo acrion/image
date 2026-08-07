@@ -111,7 +111,7 @@ namespace acrion::image::utility
     /// The comparison is made in `long double`, whose 64 bit mantissa holds the maximum of
     /// `uint64_t` exactly. `int64_t` does not: written that way the clamp for a 64 bit image
     /// wraps to -1, and for a floating point one it is undefined outright. Both of those
-    /// were real defects (imago BUG-29), which is why this lives in one place now.
+    /// were real defects (Straton BUG-29), which is why this lives in one place now.
     template <typename T>
     T ToPixel(const long double value)
     {

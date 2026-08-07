@@ -141,7 +141,7 @@ TEST(BitmapTest, TheParameterTableRoundTripKeepsTheSameBuffer)
 {
     // How every plugin receives an image: the host writes the fields into the message
     // parameters, the plugin rebuilds a Bitmap from them. Plugins that work *in place* -
-    // all of acrion imago, and CallInvertImage - depend on the rebuilt Bitmap addressing
+    // all of Straton, and CallInvertImage - depend on the rebuilt Bitmap addressing
     // the very same memory, not a copy of it.
     for (const int depth : allDepths)
     {
@@ -365,7 +365,7 @@ TEST(AbsoluteDiffTest, A64BitDifferenceDoesNotWrap)
     EXPECT_EQ(left.AbsoluteDiff(right)->GetGray(0, 0), max - 1);
 }
 
-// MaxGray is where acrion imago's star detection gets its threshold: a candidate has to be
+// MaxGray is where Straton's star detection gets its threshold: a candidate has to be
 // brighter than the average plus the standard deviation of its detection window. Both of
 // those come out of the loop below, which is an `#pragma omp parallel for` over the rows -
 // with `sum` and the index `i` shared and unsynchronised.
@@ -504,7 +504,7 @@ TEST(MaxGray2Test, TheAverageIsTheAverage)
     EXPECT_NEAR(average, (double)expected, 1.0);
 }
 
-// interpolation::Do is what acrion imago samples its corrected images with, so it decides
+// interpolation::Do is what Straton samples its corrected images with, so it decides
 // the visual quality of the product that is meant to be sold - and it had no tests. The
 // scheme is a hand-rolled distance weighting rather than a textbook bilinear one, which is
 // exactly the kind of code where a normalisation slip produces output that still looks
@@ -596,7 +596,7 @@ TEST(InterpolationTest, IsSymmetricAboutTheCentre)
 
 TEST(InterpolationTest, ClampsCoordinatesToTheGivenBounds)
 {
-    // imago samples along a distortion model, which can point outside the image. Clamping is
+    // Straton samples along a distortion model, which can point outside the image. Clamping is
     // what keeps that from reading out of bounds.
     const auto get = Corners(10, 20, 30, 40);
 
@@ -604,7 +604,7 @@ TEST(InterpolationTest, ClampsCoordinatesToTheGivenBounds)
     EXPECT_EQ((int)interpolation::Do<Scalar>(7.0, 9.0, 0, 0, 1, 1, get), 40);
 }
 
-// SampleLine is how acrion imago integrates along its correction direction: it reads a line
+// SampleLine is how Straton integrates along its correction direction: it reads a line
 // through the image and reduces the values on it to a darkest sample and a monotonicity
 // measure. Both of those are only as continuous as the set of sample positions is, and that
 // is what BUG-37 was: the count was ceil(length), so it jumped by one every time the line
@@ -668,7 +668,7 @@ namespace
 TEST(SampleLineTest, StartsAtOneEndAndFinishesAtTheOther)
 {
     // The two ends are the only positions the caller named, so they are the two that must be
-    // read exactly rather than approximately. imago's correction takes the darkest sample on
+    // read exactly rather than approximately. Straton's correction takes the darkest sample on
     // the line, and the ends are where the distortion model says the light came from.
     BitmapData<uint16_t> img(32, 32, 1);
     img.Set(Color<uint16_t>(0));
@@ -687,7 +687,7 @@ TEST(SampleLineTest, StartsAtOneEndAndFinishesAtTheOther)
 
 TEST(SampleLineTest, ReadsAtLeastOnceEveryPixel)
 {
-    // A gap wider than a pixel would step over whatever lies between - for imago, over the
+    // A gap wider than a pixel would step over whatever lies between - for Straton, over the
     // dark side of a smeared star, which is the very thing it is looking for.
     BitmapData<uint16_t> img(64, 64, 1);
     img.Set(Color<uint16_t>(0));
@@ -708,7 +708,7 @@ TEST(SampleLineTest, ReadsAtLeastOnceEveryPixel)
 
 TEST(SampleLineTest, TheSampleSetFollowsTheEndpointContinuously)
 {
-    // BUG-37, and the reason it is asserted on the positions: everything imago derives from
+    // BUG-37, and the reason it is asserted on the positions: everything Straton derives from
     // the line - the darkest value, the monotonicity weight - is a continuous function of the
     // positions, so it can only jump if they do. Growing the line by a hundredth of a pixel
     // may move each sample by at most that much, and may not conjure one up anywhere else.
